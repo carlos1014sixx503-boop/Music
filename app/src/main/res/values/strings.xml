@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Distrito Music 503</string>
+    <string name="playback_notification_channel_name">Reproducción Distrito Music 503</string>
+</resources>

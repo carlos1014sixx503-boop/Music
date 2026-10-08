@@ -1,0 +1,6 @@
+{
+  "name": "Distrito Music 503",
+  "description": "Reproductor de música nativo con interfaz moderna y elegante, diseño Liquid Glass y sistema de temas personalizados.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
