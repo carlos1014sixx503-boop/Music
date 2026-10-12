@@ -4,10 +4,21 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import com.example.data.db.SearchHistoryDao
+import com.example.data.db.SearchHistoryItem
 
-@Database(entities = [SongEntity::class, FavoriteEntity::class], version = 2, exportSchema = false)
+@Database(
+    entities = [
+        SearchHistoryItem::class,
+        SongEntity::class,
+        FavoriteEntity::class
+    ],
+    version = 2,
+    exportSchema = false
+)
 abstract class AppDatabase : RoomDatabase() {
 
+    abstract fun searchHistoryDao(): SearchHistoryDao
     abstract fun songDao(): SongDao
     abstract fun favoriteDao(): FavoriteDao
 
@@ -15,18 +26,20 @@ abstract class AppDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
-        fun getInstance(context: Context): AppDatabase {
+        fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
-                    "distrito_music_database"
+                    "soundwave_music_db"
                 )
-                    .fallbackToDestructiveMigration()
-                    .build()
+                .fallbackToDestructiveMigration()
+                .build()
                 INSTANCE = instance
                 instance
             }
         }
+
+        fun getInstance(context: Context): AppDatabase = getDatabase(context)
     }
 }

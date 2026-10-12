@@ -1,964 +1,514 @@
 package com.example.state
 
 import android.app.Application
-import androidx.compose.runtime.derivedStateOf
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableLongStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
+import android.content.Intent
+import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.data.Album
-import com.example.data.Artist
-import com.example.data.KalinMessage
-import com.example.data.KalinMessageProvider
-import com.example.data.LibraryTab
-import com.example.data.MusicFolder
-import com.example.data.RepeatMode
-import com.example.data.Song
-import com.example.data.lyrics.LyricsRepository
-import com.example.data.lyrics.SongLyrics
-import com.example.data.repository.ScanState
-import com.example.data.repository.SongRepository
-import com.example.data.youtube.YouTubePlaybackMode
-import com.example.data.youtube.YouTubeRepository
-import com.example.data.youtube.YouTubeSearchState
+import com.example.data.db.AppDatabase
+import com.example.data.db.SearchHistoryItem
+import com.example.data.model.Track
 import com.example.data.youtube.YouTubeVideo
-import com.example.playback.AudioStats
-import com.example.playback.DistritoAudioEngine
-import com.example.playback.PlaybackPreferences
-import com.example.ui.theme.AppThemeKey
-import com.example.ui.theme.DistritoThemeConfig
-import com.example.ui.theme.DistritoThemePresets
-import com.example.util.AudioPermissionHelper
+import com.example.data.repository.SearchHistoryRepository
+import com.example.playback.MediaPlaybackManager
+import com.example.playback.MediaPlaybackService
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-
-enum class PlayerViewMode {
-    ARTWORK,
-    VINYL_3D,
-    LYRICS,
-    QUEUE
-}
-
-enum class NavDestination(val label: String) {
-    HOME("Inicio"),
-    LIBRARY("Biblioteca"),
-    SEARCH("Buscar"),
-    FAVORITES("Favoritos"),
-    SETTINGS("Ajustes")
-}
-
-class MusicPlayerViewModel(application: Application) : AndroidViewModel(application) {
-
-    private val repository = SongRepository.getInstance(application)
-
-    var currentThemeKey by mutableStateOf(AppThemeKey.LIQUID_GLASS)
-        private set
-
-    val currentTheme: DistritoThemeConfig
-        get() = DistritoThemePresets.getTheme(currentThemeKey)
-
-    var currentDestination by mutableStateOf(NavDestination.HOME)
-        private set
-
-    var selectedLibraryTab by mutableStateOf(LibraryTab.SONGS)
-        private set
-
-    var isFullScreenPlayerVisible by mutableStateOf(false)
-        private set
-
-    // Estado real de la biblioteca
-    var songsList by mutableStateOf<List<Song>>(emptyList())
-        private set
-
-    var scanState by mutableStateOf<ScanState>(ScanState.Idle)
-        private set
-
-    var isPermissionGranted by mutableStateOf(false)
-        private set
-
-    var isNotificationPermissionGranted by mutableStateOf(false)
-        private set
-
-    var requestNotificationPermissionAction: (() -> Unit)? = null
-
-    fun updateNotificationPermissionState(granted: Boolean) {
-        isNotificationPermissionGranted = granted
-    }
-
-    fun requestNotificationPermissionIfNeeded() {
-        if (!isNotificationPermissionGranted) {
-            requestNotificationPermissionAction?.invoke()
-        }
-    }
-
-    var lastScanTimestamp by mutableLongStateOf(0L)
-        private set
-
-    val lastScanFormatted: String
-        get() {
-            if (lastScanTimestamp <= 0L) return "Aún no sincronizado"
-            val sdf = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault())
-            return sdf.format(Date(lastScanTimestamp))
-        }
-
-    // Listas agrupadas dinámicamente desde canciones REALES
-    val albums: List<Album> by derivedStateOf {
-        songsList.groupBy { it.album.ifBlank { "Álbum Desconocido" } }
-            .map { (albumTitle, songsInAlbum) ->
-                val firstWithArt = songsInAlbum.firstOrNull { !it.albumArtUri.isNullOrBlank() }
-                Album(
-                    id = "album_${albumTitle.hashCode()}",
-                    title = albumTitle,
-                    artist = songsInAlbum.firstOrNull()?.artist ?: "Varios Artistas",
-                    year = songsInAlbum.map { it.year }.filter { it > 1900 }.maxOrNull() ?: 2024,
-                    albumArtUri = firstWithArt?.albumArtUri,
-                    coverResId = null,
-                    songsCount = songsInAlbum.size
-                )
-            }
-            .sortedBy { it.title.lowercase(Locale.getDefault()) }
-    }
-
-    val artists: List<Artist> by derivedStateOf {
-        songsList.groupBy { it.artist.ifBlank { "Artista Desconocido" } }
-            .map { (artistName, songsInArtist) ->
-                Artist(
-                    id = "artist_${artistName.hashCode()}",
-                    name = artistName,
-                    songsCount = songsInArtist.size,
-                    albumsCount = songsInArtist.map { it.album }.distinct().size
-                )
-            }
-            .sortedBy { it.name.lowercase(Locale.getDefault()) }
-    }
-
-    val folders: List<MusicFolder> by derivedStateOf {
-        songsList.groupBy {
-            val path = it.folderPath.ifBlank { it.folderName }
-            if (path.isBlank()) "Almacenamiento" else path
-        }
-            .map { (path, songsInFolder) ->
-                val name = songsInFolder.firstOrNull()?.folderName?.ifBlank { "Música" } ?: "Música"
-                MusicFolder(
-                    id = "folder_${path.hashCode()}",
-                    name = name,
-                    path = path,
-                    songCount = songsInFolder.size
-                )
-            }
-            .sortedBy { it.name.lowercase(Locale.getDefault()) }
-    }
-
-    // Playback state
-    var currentSong by mutableStateOf<Song?>(null)
-        private set
-
-    var isPlaying by mutableStateOf(false)
-        private set
-
-    var currentPositionSeconds by mutableIntStateOf(0)
-        private set
-
-    var isShuffle by mutableStateOf(false)
-        private set
-
-    var repeatMode by mutableStateOf(RepeatMode.ALL)
-        private set
-
-    var volume by mutableStateOf(1.0f)
-        private set
-
-    var favoriteSongIds by mutableStateOf<Set<String>>(emptySet())
-        private set
-
-    var favoriteSongs by mutableStateOf<List<Song>>(emptyList())
-        private set
-
-    var favoriteFeedbackMessage by mutableStateOf<String?>(null)
-        private set
-
-    private var favoriteFeedbackJob: Job? = null
-
-    fun dismissFavoriteFeedback() {
-        favoriteFeedbackJob?.cancel()
-        favoriteFeedbackMessage = null
-    }
-
-    // Configuración interactiva de Fondo Traslúcido y Difuminado Batman
-    var wallpaperBlurDp by mutableIntStateOf(2)
-        private set
-
-    var wallpaperAlpha by mutableFloatStateOf(0.85f)
-        private set
-
-    var customWallpaperRes by mutableStateOf<Int?>(null)
-        private set
 
-    fun updateWallpaperBlur(dp: Int) {
-        wallpaperBlurDp = dp
-    }
+class MusicPlayerState(application: Application) : AndroidViewModel(application) {
 
-    fun updateWallpaperAlpha(alpha: Float) {
-        wallpaperAlpha = alpha
-    }
+    private val searchHistoryRepo: SearchHistoryRepository
 
-    fun updateCustomWallpaper(resId: Int?) {
-        customWallpaperRes = resId
-    }
+    val searchHistory: StateFlow<List<SearchHistoryItem>>
 
-    var recentlyPlayedSongs by mutableStateOf<List<Song>>(emptyList())
-        private set
+    private val _currentTrack = MutableStateFlow<Track?>(null)
+    val currentTrack: StateFlow<Track?> = _currentTrack.asStateFlow()
 
-    var searchQuery by mutableStateOf("")
-        private set
+    private val _isPlaying = MutableStateFlow(false)
+    val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
 
-    // Resultados de búsqueda sobre la biblioteca real
-    val searchResultsSongs: List<Song> by derivedStateOf {
-        if (searchQuery.isBlank()) emptyList()
-        else songsList.filter {
-            it.title.contains(searchQuery, ignoreCase = true) ||
-            it.artist.contains(searchQuery, ignoreCase = true) ||
-            it.album.contains(searchQuery, ignoreCase = true) ||
-            it.genre.contains(searchQuery, ignoreCase = true)
-        }
-    }
+    private val _playbackPositionMs = MutableStateFlow(87000L) // ~1:27 initial position
+    val playbackPositionMs: StateFlow<Long> = _playbackPositionMs.asStateFlow()
 
-    val searchResultsAlbums: List<Album> by derivedStateOf {
-        if (searchQuery.isBlank()) emptyList()
-        else albums.filter {
-            it.title.contains(searchQuery, ignoreCase = true) ||
-            it.artist.contains(searchQuery, ignoreCase = true)
-        }
-    }
+    private val _durationMs = MutableStateFlow(179000L) // ~2:59 duration like reference image
+    val durationMs: StateFlow<Long> = _durationMs.asStateFlow()
 
-    val searchResultsArtists: List<Artist> by derivedStateOf {
-        if (searchQuery.isBlank()) emptyList()
-        else artists.filter {
-            it.name.contains(searchQuery, ignoreCase = true)
-        }
-    }
+    private val _playlist = MutableStateFlow<List<Track>>(emptyList())
+    val playlist: StateFlow<List<Track>> = _playlist.asStateFlow()
 
-    // Audio effects / Equalizer
-    var isBassBoostEnabled by mutableStateOf(true)
-        private set
+    private val _queue = MutableStateFlow<List<Track>>(emptyList())
+    val queue: StateFlow<List<Track>> = _queue.asStateFlow()
 
-    var bassBoostLevel by mutableIntStateOf(75)
-        private set
+    private val _isShuffle = MutableStateFlow(false)
+    val isShuffle: StateFlow<Boolean> = _isShuffle.asStateFlow()
 
-    var equalizerPreset by mutableStateOf("Club Electrónico 503")
-        private set
+    private val _isRepeat = MutableStateFlow(true)
+    val isRepeat: StateFlow<Boolean> = _isRepeat.asStateFlow()
 
-    // Audio Engine real basado en Jetpack Media3 (ExoPlayer)
-    val audioEngine = DistritoAudioEngine.getInstance(application)
+    private val _favorites = MutableStateFlow<Set<String>>(setOf("track_blinding_lights", "yt_4NRXx6U8ABQ"))
+    val favorites: StateFlow<Set<String>> = _favorites.asStateFlow()
 
-    // Preferencias de reproducción persistentes
-    private val playbackPreferences = PlaybackPreferences(application)
+    private val _history = MutableStateFlow<List<Track>>(emptyList())
+    val history: StateFlow<List<Track>> = _history.asStateFlow()
 
-    // Repositorio oficial para YouTube
-    private val youtubeRepository = YouTubeRepository(application)
+    // YouTube Modal State
+    private val _activeYouTubeVideo = MutableStateFlow<YouTubeVideo?>(null)
+    val activeYouTubeVideo: StateFlow<YouTubeVideo?> = _activeYouTubeVideo.asStateFlow()
 
-    var youtubeSearchQuery by mutableStateOf("")
-        private set
+    private val _isYouTubeModalVisible = MutableStateFlow(false)
+    val isYouTubeModalVisible: StateFlow<Boolean> = _isYouTubeModalVisible.asStateFlow()
 
-    var youtubeSearchState by mutableStateOf<YouTubeSearchState>(YouTubeSearchState.Idle)
-        private set
+    private val _isFullScreenPlayerVisible = MutableStateFlow(false)
+    val isFullScreenPlayerVisible: StateFlow<Boolean> = _isFullScreenPlayerVisible.asStateFlow()
 
-    var activeOnlineVideo by mutableStateOf<YouTubeVideo?>(null)
-        private set
+    // Equalizer & DSP State (Always present and accessible in the app)
+    private val _isEqualizerVisible = MutableStateFlow(false)
+    val isEqualizerVisible: StateFlow<Boolean> = _isEqualizerVisible.asStateFlow()
 
-    var youtubePlaybackMode by mutableStateOf(playbackPreferences.youtubePlaybackMode)
-        private set
+    private val _isDspEnabled = MutableStateFlow(true)
+    val isDspEnabled: StateFlow<Boolean> = _isDspEnabled.asStateFlow()
 
-    var pendingModeSelectionVideo by mutableStateOf<YouTubeVideo?>(null)
-        private set
+    private val _equalizerPreset = MutableStateFlow("Club 503")
+    val equalizerPreset: StateFlow<String> = _equalizerPreset.asStateFlow()
 
-    var isOnlinePlayerVisible by mutableStateOf(false)
-        private set
-
-    var isOnlineMiniPlayerActive by mutableStateOf(false)
-        private set
-
-    var isYouTubeAudioPlaying by mutableStateOf(true)
-        private set
-
-    var playbackErrorMessage by mutableStateOf<String?>(null)
-        private set
-
-    // Kalin Welcome Personality State
-    var kalinWelcomeMessage by mutableStateOf<KalinMessage?>(null)
-        private set
-
-    var isKalinWelcomeVisible by mutableStateOf(false)
-        private set
-
-    private var kalinWelcomeJob: Job? = null
-
-    // Modal de Ecualizador DSP
-    var isEqualizerModalVisible by mutableStateOf(false)
-        private set
-
-    // Modo 3D / Vinilo Giratorio en FullScreenPlayer
-    var isPlayer3DMode by mutableStateOf(false)
-        private set
-
-    // Vista activa en FullScreenPlayer (Carátula, Vinilo 3D, Letras Sincronizadas, Cola)
-    var playerViewMode by mutableStateOf(PlayerViewMode.ARTWORK)
-        private set
-
-    // Velocidad de reproducción (0.5x a 2.0x estilo BitChord)
-    var playbackSpeed by mutableFloatStateOf(1.0f)
-        private set
-
-    // Cola actual observable
-    var currentQueue by mutableStateOf<List<Song>>(emptyList())
-        private set
-
-    // Modales de funciones BitChord
-    var isStatsForNerdsVisible by mutableStateOf(false)
-        private set
-
-    var isSleepTimerModalVisible by mutableStateOf(false)
-        private set
-
-    var isPlaybackSpeedModalVisible by mutableStateOf(false)
-        private set
-
-    var isQueueModalVisible by mutableStateOf(false)
-        private set
-
-    // Menú contextual de 3 puntos para cualquier canción
-    var songForActionMenu by mutableStateOf<Song?>(null)
-        private set
-
-    var isSongActionMenuVisible by mutableStateOf(false)
-        private set
-
-    fun openSongActionMenu(song: Song) {
-        songForActionMenu = song
-        isSongActionMenuVisible = true
-    }
-
-    fun dismissSongActionMenu() {
-        isSongActionMenuVisible = false
-        songForActionMenu = null
-    }
-
-    // Filtros de categoría rápida en Home ("Todo", "Energía", "Relajante", "Entrenamiento", "Para concentrarse", "Viaje diario")
-    var selectedHomeCategory by mutableStateOf("Todo")
-        private set
-
-    fun selectHomeCategory(category: String) {
-        selectedHomeCategory = category
-    }
-
-    // Letras sincronizadas dinámicas de la canción actual
-    val currentLyrics: SongLyrics? by derivedStateOf {
-        currentSong?.let { LyricsRepository.getLyricsForSong(it) }
-    }
-
-    // Estadísticas de audio para Stats for Nerds
-    val audioStats: AudioStats by derivedStateOf {
-        audioEngine.getAudioStats()
-    }
-
-    // Temporizador de Apagado (Sleep Timer)
-    var sleepTimerRemainingSeconds by mutableStateOf<Int?>(null)
-        private set
-
-    private var sleepTimerJob: Job? = null
-
-    // Estados de DSP
-    var isDspEnabled by mutableStateOf(true)
-        private set
-    var bandLevels by mutableStateOf(listOf(5, 3, -1, 2, 4))
-        private set
-    var bassBoostPercent by mutableStateOf(70)
-        private set
-    var virtualizerPercent by mutableStateOf(50)
-        private set
+    private val _bandLevels = MutableStateFlow(listOf(5, 3, -1, 2, 4))
+    val bandLevels: StateFlow<List<Int>> = _bandLevels.asStateFlow()
+
+    private val _bassBoostPercent = MutableStateFlow(45)
+    val bassBoostPercent: StateFlow<Int> = _bassBoostPercent.asStateFlow()
+
+    private val _virtualizerPercent = MutableStateFlow(30)
+    val virtualizerPercent: StateFlow<Int> = _virtualizerPercent.asStateFlow()
+
+    private var progressJob: Job? = null
+    private var playbackManager: MediaPlaybackManager? = null
 
     init {
-        checkPermissionState()
-        observeDatabase()
-        observeAudioEngine()
-        triggerKalinWelcome()
+        // Initialize Room Database
+        val db = AppDatabase.getDatabase(application)
+        searchHistoryRepo = SearchHistoryRepository(db.searchHistoryDao())
+        searchHistory = searchHistoryRepo.allHistory.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
 
-        // Sembrar canciones iniciales en Room para permitir usar favoritos inmediatamente
+        // Seed initial search history items for immediate user convenience
         viewModelScope.launch {
-            repository.seedInitialDataIfEmpty()
+            searchHistoryRepo.saveQuery("The Weeknd")
+            searchHistoryRepo.saveQuery("Post Malone Sunflower")
+            searchHistoryRepo.saveQuery("Billie Eilish Happier Than Ever")
+            searchHistoryRepo.saveQuery("Imagine Dragons")
         }
 
-        // Si ya tenemos permisos al iniciar, escanear o refrescar automáticamente
-        if (isPermissionGranted) {
-            scanLibrary()
+        // Initialize Media Session & Headphone / Speaker Hardware Button Manager
+        playbackManager = MediaPlaybackManager(
+            context = application,
+            onPlayRequested = { setPlaying(true) },
+            onPauseRequested = { setPlaying(false) },
+            onNextRequested = { playNext() },
+            onPreviousRequested = { playPrevious() }
+        )
+
+        // Connect with background MediaPlaybackService callbacks
+        MediaPlaybackService.serviceInstance?.let { service ->
+            setupServiceCallbacks(service)
         }
+
+        // Populate curated library matching the user's reference mockup
+        val curatedTracks = listOf(
+            Track(
+                id = "track_blinding_lights",
+                title = "Blinding Lights",
+                artist = "The Weeknd",
+                durationMs = 179000L, // 2:59
+                albumArtUrl = "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=600&auto=format&fit=crop&q=80",
+                genre = "Top Hit",
+                youtubeVideoId = "4NRXx6U8ABQ",
+                isOnline = true,
+                isFavorite = true
+            ),
+            Track(
+                id = "track_save_your_tears",
+                title = "Save Your Tears",
+                artist = "The Weeknd",
+                durationMs = 215000L, // 3:35
+                albumArtUrl = "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=600&auto=format&fit=crop&q=80",
+                genre = "Pop",
+                youtubeVideoId = "XXYlFuWEuKI",
+                isOnline = true
+            ),
+            Track(
+                id = "track_happier_than_ever",
+                title = "Happier Than Ever",
+                artist = "Billie Eilish",
+                durationMs = 297000L, // 4:57
+                albumArtUrl = "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=600&auto=format&fit=crop&q=80",
+                genre = "Alternative",
+                youtubeVideoId = "5GJWxDKyk3A",
+                isOnline = true
+            ),
+            Track(
+                id = "track_sunflower",
+                title = "Sunflower",
+                artist = "Post Malone",
+                durationMs = 160000L, // 2:40
+                albumArtUrl = "https://images.unsplash.com/photo-1501386761578-eac5c94b800a?w=600&auto=format&fit=crop&q=80",
+                genre = "Hip-Hop",
+                youtubeVideoId = "ApXoWvfEYVU",
+                isOnline = true
+            ),
+            Track(
+                id = "track_believer",
+                title = "Believer",
+                artist = "Imagine Dragons",
+                durationMs = 205000L, // 3:25
+                albumArtUrl = "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=600&auto=format&fit=crop&q=80",
+                genre = "Rock",
+                youtubeVideoId = "7wtfhZwyrcc",
+                isOnline = true
+            ),
+            Track(
+                id = "track_positions",
+                title = "Positions",
+                artist = "Ariana Grande",
+                durationMs = 182000L, // 3:02
+                albumArtUrl = "https://images.unsplash.com/photo-1518609878373-06d740f60d8b?w=600&auto=format&fit=crop&q=80",
+                genre = "R&B",
+                youtubeVideoId = "tcYodQoapMg",
+                isOnline = true
+            ),
+            Track(
+                id = "track_shivers",
+                title = "Shivers",
+                artist = "Ed Sheeran",
+                durationMs = 208000L, // 3:28
+                albumArtUrl = "https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=600&auto=format&fit=crop&q=80",
+                genre = "Pop",
+                youtubeVideoId = "Il0S8BoucSA",
+                isOnline = true
+            ),
+            Track(
+                id = "track_ghost",
+                title = "Ghost",
+                artist = "Justin Bieber",
+                durationMs = 192000L, // 3:12
+                albumArtUrl = "https://images.unsplash.com/photo-1520523839898-507127cd53c3?w=600&auto=format&fit=crop&q=80",
+                genre = "Pop",
+                youtubeVideoId = "Fp8msa5uYsc",
+                isOnline = true
+            ),
+            Track(
+                id = "track_ocean_eyes",
+                title = "Ocean Eyes",
+                artist = "Billie Eilish",
+                durationMs = 196000L,
+                albumArtUrl = "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=600&auto=format&fit=crop&q=80",
+                genre = "Soft Vibe"
+            ),
+            Track(
+                id = "track_circles_run",
+                title = "Circles Run",
+                artist = "Post Malone",
+                durationMs = 215000L,
+                albumArtUrl = "https://images.unsplash.com/photo-1445985543470-41f30c08f10a?w=600&auto=format&fit=crop&q=80",
+                genre = "Fan Fav"
+            )
+        )
+
+        _playlist.value = curatedTracks
+        _currentTrack.value = curatedTracks.first()
     }
 
-    private fun observeAudioEngine() {
-        viewModelScope.launch {
-            audioEngine.currentSong.collectLatest { song ->
-                if (song != null) {
-                    currentSong = song
-                }
-            }
-        }
-
-        viewModelScope.launch {
-            audioEngine.isPlaying.collectLatest { playing ->
-                isPlaying = playing
-            }
-        }
-
-        viewModelScope.launch {
-            audioEngine.currentPositionMs.collectLatest { posMs ->
-                currentPositionSeconds = (posMs / 1000L).toInt()
-            }
-        }
-
-        viewModelScope.launch {
-            audioEngine.isShuffle.collectLatest { shuffle ->
-                isShuffle = shuffle
-            }
-        }
-
-        viewModelScope.launch {
-            audioEngine.repeatMode.collectLatest { mode ->
-                repeatMode = mode
-            }
-        }
-
-        viewModelScope.launch {
-            audioEngine.volume.collectLatest { vol ->
-                volume = vol
-            }
-        }
-
-        viewModelScope.launch {
-            audioEngine.errorMessage.collectLatest { err ->
-                playbackErrorMessage = err
-            }
-        }
-
-        viewModelScope.launch {
-            audioEngine.isDspEnabled.collectLatest { enabled ->
-                isDspEnabled = enabled
-            }
-        }
-
-        viewModelScope.launch {
-            audioEngine.equalizerPreset.collectLatest { preset ->
-                equalizerPreset = preset
-            }
-        }
-
-        viewModelScope.launch {
-            audioEngine.bandLevels.collectLatest { levels ->
-                bandLevels = levels
-            }
-        }
-
-        viewModelScope.launch {
-            audioEngine.bassBoostPercent.collectLatest { boost ->
-                bassBoostPercent = boost
-            }
-        }
-
-        viewModelScope.launch {
-            audioEngine.virtualizerPercent.collectLatest { virt ->
-                virtualizerPercent = virt
-            }
-        }
-
-        viewModelScope.launch {
-            audioEngine.queueFlow.collectLatest { q ->
-                currentQueue = q
-            }
-        }
-
-        viewModelScope.launch {
-            audioEngine.playbackSpeed.collectLatest { spd ->
-                playbackSpeed = spd
-            }
-        }
+    private fun setupServiceCallbacks(service: MediaPlaybackService) {
+        service.onPlayAction = { setPlaying(true) }
+        service.onPauseAction = { setPlaying(false) }
+        service.onNextAction = { playNext() }
+        service.onPreviousAction = { playPrevious() }
     }
 
-    fun checkPermissionState() {
-        val granted = AudioPermissionHelper.hasPermission(getApplication())
-        isPermissionGranted = granted
-        if (!granted && scanState is ScanState.Idle) {
-            scanState = ScanState.PermissionRequired("Se requiere permiso para escanear tu música")
-        }
-    }
-
-    fun onPermissionResult(granted: Boolean) {
-        isPermissionGranted = granted
-        if (granted) {
-            scanLibrary()
-            requestNotificationPermissionIfNeeded()
-        } else {
-            scanState = ScanState.PermissionRequired("Permiso denegado. No se puede acceder a la música local.")
-        }
-    }
-
-    private fun observeDatabase() {
-        viewModelScope.launch {
-            repository.allSongs.collectLatest { list ->
-                songsList = list
-                audioEngine.syncQueue(list)
-                if (currentSong == null && list.isNotEmpty()) {
-                    currentSong = list.first()
-                } else if (currentSong != null && list.none { it.id == currentSong?.id }) {
-                    currentSong = list.firstOrNull()
-                }
-            }
-        }
-
-        viewModelScope.launch {
-            repository.favoriteSongs.collectLatest { favorites ->
-                favoriteSongs = favorites
-                favoriteSongIds = favorites.map { it.id }.toSet()
-            }
-        }
-
-        viewModelScope.launch {
-            repository.recentlyAddedSongs.collectLatest { recent ->
-                if (recentlyPlayedSongs.isEmpty()) {
-                    recentlyPlayedSongs = recent.take(6)
-                }
-            }
-        }
-    }
-
-    /**
-     * Escanea el almacenamiento local del dispositivo Android y actualiza Room.
-     */
-    fun scanLibrary() {
-        if (!AudioPermissionHelper.hasPermission(getApplication())) {
-            scanState = ScanState.PermissionRequired("Se requiere permiso para escanear tu música")
-            return
-        }
-
-        scanState = ScanState.Scanning
-        viewModelScope.launch {
-            val result = repository.scanDeviceLibrary(getApplication())
-            scanState = result
-            if (result is ScanState.Success) {
-                lastScanTimestamp = result.timestamp
-            }
-        }
-    }
-
-    /**
-     * Muestra la bienvenida de Kalin seleccionando un mensaje aleatorio.
-     */
-    fun triggerKalinWelcome() {
-        val message = KalinMessageProvider.getRandomMessage(kalinWelcomeMessage?.id)
-        kalinWelcomeMessage = message
-        isKalinWelcomeVisible = true
-
-        kalinWelcomeJob?.cancel()
-        kalinWelcomeJob = viewModelScope.launch {
-            delay(5500L)
-            isKalinWelcomeVisible = false
-        }
-    }
-
-    fun dismissKalinWelcome() {
-        kalinWelcomeJob?.cancel()
-        isKalinWelcomeVisible = false
-    }
-
-    fun playSong(song: Song, queue: List<Song> = songsList) {
-        requestNotificationPermissionIfNeeded()
-        audioEngine.playSong(song, queue)
-
-        viewModelScope.launch {
-            repository.incrementPlayCount(song.id)
-        }
-
-        val updated = recentlyPlayedSongs.toMutableList()
-        updated.remove(song)
-        updated.add(0, song)
-        recentlyPlayedSongs = updated.take(10)
-    }
-
-    fun togglePlayPause() {
-        audioEngine.togglePlayPause()
-    }
-
-    fun playNext() {
-        audioEngine.playNext()
-    }
-
-    fun playPrevious() {
-        audioEngine.playPrevious()
-    }
-
-    fun seekTo(seconds: Int) {
-        audioEngine.seekToSeconds(seconds)
-    }
-
-    fun seekForward(seconds: Int = 10) {
-        audioEngine.seekForward(seconds)
-    }
-
-    fun seekBackward(seconds: Int = 10) {
-        audioEngine.seekBackward(seconds)
-    }
-
-    fun toggleShuffle() {
-        audioEngine.toggleShuffle()
-    }
-
-    fun toggleRepeat() {
-        audioEngine.toggleRepeat()
-    }
-
-    fun updateVolume(vol: Float) {
-        audioEngine.setVolume(vol)
-    }
-
-    fun dismissPlaybackError() {
-        audioEngine.dismissErrorMessage()
-        playbackErrorMessage = null
-    }
-
-    fun toggleFavorite(songId: String) {
-        val currentlyFav = isSongFavorite(songId)
-        val newFav = !currentlyFav
-        val updated = favoriteSongIds.toMutableSet()
-        if (newFav) updated.add(songId) else updated.remove(songId)
-        favoriteSongIds = updated
-
-        // Notificación de estado temporal
-        val targetSong = songsList.firstOrNull { it.id == songId } ?: currentSong
-        val songTitle = targetSong?.title ?: "Canción"
-        favoriteFeedbackMessage = if (newFav) {
-            "\"$songTitle\" guardada en Favoritos ❤️"
-        } else {
-            "\"$songTitle\" eliminada de Favoritos"
-        }
-        favoriteFeedbackJob?.cancel()
-        favoriteFeedbackJob = viewModelScope.launch {
-            delay(2500L)
-            favoriteFeedbackMessage = null
-        }
-
-        viewModelScope.launch {
-            repository.toggleFavorite(songId, newFav)
-        }
-    }
-
-    fun playFavorites(shuffle: Boolean = false) {
-        val favs = favoriteSongs.ifEmpty { songsList.filter { isSongFavorite(it.id) } }
-        if (favs.isNotEmpty()) {
-            if (shuffle) {
-                if (!isShuffle) toggleShuffle()
-                val randomSong = favs.random()
-                playSong(randomSong, favs)
+    private fun startForegroundPlaybackService() {
+        try {
+            val app = getApplication<Application>()
+            val intent = Intent(app, MediaPlaybackService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                app.startForegroundService(intent)
             } else {
-                playSong(favs.first(), favs)
+                app.startService(intent)
             }
+            MediaPlaybackService.serviceInstance?.let { service ->
+                setupServiceCallbacks(service)
+                service.updateNotification(_currentTrack.value, _isPlaying.value)
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("MusicPlayerState", "Could not start foreground playback service: ${e.message}")
         }
     }
 
-    fun isSongFavorite(songId: String): Boolean {
-        return favoriteSongIds.contains(songId)
-    }
+    fun playTrack(track: Track) {
+        _currentTrack.value = track
+        _durationMs.value = track.durationMs
+        _playbackPositionMs.value = 0L
+        _isPlaying.value = true
 
-    fun setTheme(themeKey: AppThemeKey) {
-        currentThemeKey = themeKey
-    }
+        addToHistory(track)
+        startForegroundPlaybackService()
+        playbackManager?.updatePlaybackState(true, 0L)
 
-    fun setDestination(destination: NavDestination) {
-        currentDestination = destination
-    }
-
-    fun setLibraryTab(tab: LibraryTab) {
-        selectedLibraryTab = tab
-    }
-
-    fun showFullScreenPlayer(show: Boolean) {
-        isFullScreenPlayerVisible = show
-    }
-
-    fun updateSearchQuery(query: String) {
-        searchQuery = query
-    }
-
-    fun toggleBassBoost() {
-        isBassBoostEnabled = !isBassBoostEnabled
-    }
-
-    fun updateBassBoostLevel(level: Int) {
-        bassBoostLevel = level.coerceIn(0, 100)
-    }
-
-    fun setEqualizer(preset: String) {
-        equalizerPreset = preset
-        audioEngine.setEqualizerPreset(preset, bandLevels)
-    }
-
-    // --- YouTube Online Integration ---
-
-    fun updateYouTubeSearchQuery(query: String) {
-        youtubeSearchQuery = query
-    }
-
-    fun searchYouTube(customQuery: String? = null) {
-        val queryToSearch = (customQuery ?: youtubeSearchQuery).trim()
-        if (customQuery != null) {
-            youtubeSearchQuery = customQuery
+        if (track.isOnline && !track.youtubeVideoId.isNullOrEmpty()) {
+            _activeYouTubeVideo.value = YouTubeVideo(
+                videoId = track.youtubeVideoId,
+                title = track.title,
+                channelTitle = track.artist,
+                thumbnailUrl = track.albumArtUrl,
+                durationFormatted = track.durationFormatted,
+                durationMs = track.durationMs
+            )
+            _isYouTubeModalVisible.value = true
+            stopLocalTicker()
+        } else {
+            startLocalTicker()
         }
-        if (queryToSearch.isBlank()) {
-            youtubeSearchState = YouTubeSearchState.Idle
-            return
-        }
-
-        viewModelScope.launch {
-            youtubeSearchState = YouTubeSearchState.Loading
-            val result = youtubeRepository.search(queryToSearch)
-            youtubeSearchState = result
-        }
-    }
-
-    fun retryYouTubeSearch() {
-        searchYouTube()
-    }
-
-    fun selectYouTubeVideo(video: YouTubeVideo) {
-        // Iniciar directamente con el modo activo seleccionado, sin ventanas emergentes
-        startYouTubePlayback(video, youtubePlaybackMode)
-    }
-
-    fun dismissModeSelection() {
-        pendingModeSelectionVideo = null
-    }
-
-    fun startYouTubePlayback(video: YouTubeVideo, mode: YouTubePlaybackMode) {
-        // Pausar reproducción local para evitar mezclar audios, manteniendo intacta la cola local
-        if (isPlaying) {
-            audioEngine.pause()
-        }
-        activeOnlineVideo = video
-        youtubePlaybackMode = mode
-        playbackPreferences.youtubePlaybackMode = mode
-        pendingModeSelectionVideo = null
-        isOnlinePlayerVisible = true
-        isOnlineMiniPlayerActive = false
-        isYouTubeAudioPlaying = true
     }
 
     fun playYouTubeVideo(video: YouTubeVideo) {
-        startYouTubePlayback(video, youtubePlaybackMode)
+        val track = video.toTrack()
+        _currentTrack.value = track
+        _durationMs.value = video.durationMs
+        _playbackPositionMs.value = 0L
+        _isPlaying.value = true
+        _activeYouTubeVideo.value = video
+        _isYouTubeModalVisible.value = true
+
+        addToHistory(track)
+        startForegroundPlaybackService()
+        playbackManager?.updatePlaybackState(true, 0L)
+        stopLocalTicker()
     }
 
-    fun setPlaybackMode(mode: YouTubePlaybackMode) {
-        youtubePlaybackMode = mode
-        playbackPreferences.youtubePlaybackMode = mode
-    }
-
-    fun minimizeOnlinePlayer() {
-        isOnlinePlayerVisible = false
-        isOnlineMiniPlayerActive = true
-    }
-
-    fun restoreOnlinePlayer() {
-        isOnlinePlayerVisible = true
-        isOnlineMiniPlayerActive = false
-    }
-
-    fun stopOnlinePlayback() {
-        isOnlinePlayerVisible = false
-        isOnlineMiniPlayerActive = false
-        activeOnlineVideo = null
-        isYouTubeAudioPlaying = false
-    }
-
-    fun toggleYouTubeAudioPlayback() {
-        isYouTubeAudioPlaying = !isYouTubeAudioPlaying
-    }
-
-    fun updateYouTubeAudioPlaying(playing: Boolean) {
-        isYouTubeAudioPlaying = playing
-    }
-
-    fun playNextYouTubeVideo() {
-        val currentList = (youtubeSearchState as? YouTubeSearchState.Success)?.videos ?: return
-        val currentIndex = currentList.indexOfFirst { it.id == activeOnlineVideo?.id }
-        if (currentIndex != -1 && currentIndex < currentList.size - 1) {
-            startYouTubePlayback(currentList[currentIndex + 1], youtubePlaybackMode)
-        } else if (currentList.isNotEmpty()) {
-            startYouTubePlayback(currentList.first(), youtubePlaybackMode)
+    fun openYouTubePlayer(video: YouTubeVideo? = null) {
+        if (video != null) {
+            playYouTubeVideo(video)
+        } else {
+            _isYouTubeModalVisible.value = true
         }
     }
 
-    fun playPreviousYouTubeVideo() {
-        val currentList = (youtubeSearchState as? YouTubeSearchState.Success)?.videos ?: return
-        val currentIndex = currentList.indexOfFirst { it.id == activeOnlineVideo?.id }
-        if (currentIndex > 0) {
-            startYouTubePlayback(currentList[currentIndex - 1], youtubePlaybackMode)
-        } else if (currentList.isNotEmpty()) {
-            startYouTubePlayback(currentList.last(), youtubePlaybackMode)
+    fun closeYouTubePlayer() {
+        _isYouTubeModalVisible.value = false
+    }
+
+    fun showFullScreenPlayer() {
+        _isFullScreenPlayerVisible.value = true
+    }
+
+    fun hideFullScreenPlayer() {
+        _isFullScreenPlayerVisible.value = false
+    }
+
+    fun syncYouTubeProgress(currentTimeSec: Float, totalDurationSec: Float, isVideoPlaying: Boolean) {
+        if (totalDurationSec > 0f) {
+            _durationMs.value = (totalDurationSec * 1000).toLong()
+        }
+        val pos = (currentTimeSec * 1000).toLong().coerceIn(0L, _durationMs.value)
+        _playbackPositionMs.value = pos
+        _isPlaying.value = isVideoPlaying
+        playbackManager?.updatePlaybackState(isVideoPlaying, pos)
+        MediaPlaybackService.serviceInstance?.updateNotification(_currentTrack.value, isVideoPlaying)
+    }
+
+    fun togglePlayPause() {
+        setPlaying(!_isPlaying.value)
+    }
+
+    fun setPlaying(playing: Boolean) {
+        _isPlaying.value = playing
+        playbackManager?.updatePlaybackState(playing, _playbackPositionMs.value)
+        MediaPlaybackService.serviceInstance?.updateNotification(_currentTrack.value, playing)
+
+        if (_currentTrack.value?.isOnline != true) {
+            if (playing) startLocalTicker() else stopLocalTicker()
         }
     }
 
-    fun dismissOnlinePlayer() {
-        stopOnlinePlayback()
+    fun seekTo(positionMs: Long) {
+        _playbackPositionMs.value = positionMs.coerceIn(0L, _durationMs.value)
+        playbackManager?.updatePlaybackState(_isPlaying.value, _playbackPositionMs.value)
     }
 
-    // Métodos de Ecualizador DSP
-    fun showEqualizerModal(show: Boolean) {
-        isEqualizerModalVisible = show
+    fun playNext() {
+        val list = if (_queue.value.isNotEmpty()) _queue.value else _playlist.value
+        if (list.isEmpty()) return
+
+        val currentIndex = list.indexOfFirst { it.id == _currentTrack.value?.id }
+        val nextIndex = if (_isShuffle.value) {
+            (list.indices).random()
+        } else {
+            (currentIndex + 1) % list.size
+        }
+        playTrack(list[nextIndex])
     }
 
-    fun enableDsp(enabled: Boolean) {
-        audioEngine.setDspEnabled(enabled)
+    fun playPrevious() {
+        val list = _playlist.value
+        if (list.isEmpty()) return
+
+        if (_playbackPositionMs.value > 3000L) {
+            seekTo(0L)
+            return
+        }
+
+        val currentIndex = list.indexOfFirst { it.id == _currentTrack.value?.id }
+        val prevIndex = if (currentIndex <= 0) list.size - 1 else currentIndex - 1
+        playTrack(list[prevIndex])
     }
 
-    fun setBandLevel(bandIndex: Int, levelDb: Int) {
-        audioEngine.setBandLevel(bandIndex, levelDb)
+    fun toggleShuffle() {
+        _isShuffle.value = !_isShuffle.value
+    }
+
+    fun toggleRepeat() {
+        _isRepeat.value = !_isRepeat.value
+    }
+
+    fun toggleFavorite(trackId: String) {
+        val currentFavs = _favorites.value.toMutableSet()
+        if (currentFavs.contains(trackId)) {
+            currentFavs.remove(trackId)
+        } else {
+            currentFavs.add(trackId)
+        }
+        _favorites.value = currentFavs
+    }
+
+    fun isTrackFavorite(trackId: String): Boolean {
+        return _favorites.value.contains(trackId)
+    }
+
+    fun addToQueue(track: Track) {
+        val currentQueue = _queue.value.toMutableList()
+        if (!currentQueue.any { it.id == track.id }) {
+            currentQueue.add(track)
+            _queue.value = currentQueue
+        }
+    }
+
+    fun removeFromQueue(trackId: String) {
+        _queue.value = _queue.value.filterNot { it.id == trackId }
+    }
+
+    // Room Database Search History Methods
+    fun saveSearchQuery(query: String) {
+        viewModelScope.launch {
+            searchHistoryRepo.saveQuery(query)
+        }
+    }
+
+    fun deleteSearchQuery(id: Long) {
+        viewModelScope.launch {
+            searchHistoryRepo.removeQuery(id)
+        }
+    }
+
+    fun clearSearchHistory() {
+        viewModelScope.launch {
+            searchHistoryRepo.clearAll()
+        }
+    }
+
+    private fun addToHistory(track: Track) {
+        val currentHistory = _history.value.toMutableList()
+        currentHistory.removeAll { it.id == track.id }
+        currentHistory.add(0, track)
+        if (currentHistory.size > 50) {
+            _history.value = currentHistory.take(50)
+        } else {
+            _history.value = currentHistory
+        }
+    }
+
+    // Equalizer & Audio DSP Control Methods
+    fun showEqualizer() {
+        _isEqualizerVisible.value = true
+    }
+
+    fun hideEqualizer() {
+        _isEqualizerVisible.value = false
+    }
+
+    fun toggleEqualizer() {
+        _isEqualizerVisible.value = !_isEqualizerVisible.value
+    }
+
+    fun setDspEnabled(enabled: Boolean) {
+        _isDspEnabled.value = enabled
     }
 
     fun setEqualizerPreset(presetName: String, levels: List<Int>) {
-        audioEngine.setEqualizerPreset(presetName, levels)
+        _equalizerPreset.value = presetName
+        _bandLevels.value = levels
+    }
+
+    fun setBandLevel(index: Int, level: Int) {
+        val current = _bandLevels.value.toMutableList()
+        if (index in current.indices) {
+            current[index] = level
+            _bandLevels.value = current
+            _equalizerPreset.value = "Personalizado"
+        }
     }
 
     fun setBassBoost(percent: Int) {
-        audioEngine.setBassBoost(percent)
+        _bassBoostPercent.value = percent
     }
 
     fun setVirtualizer(percent: Int) {
-        audioEngine.setVirtualizer(percent)
+        _virtualizerPercent.value = percent
     }
 
     fun resetEqualizer() {
-        audioEngine.resetEqualizer()
+        _equalizerPreset.value = "Plano"
+        _bandLevels.value = listOf(0, 0, 0, 0, 0)
+        _bassBoostPercent.value = 0
+        _virtualizerPercent.value = 0
     }
 
-    // Modo 3D / Vinilo Giratorio
-    fun togglePlayer3DMode() {
-        isPlayer3DMode = !isPlayer3DMode
-        playerViewMode = if (isPlayer3DMode) PlayerViewMode.VINYL_3D else PlayerViewMode.ARTWORK
-    }
-
-    fun switchPlayer3DMode(enabled: Boolean) {
-        isPlayer3DMode = enabled
-        playerViewMode = if (enabled) PlayerViewMode.VINYL_3D else PlayerViewMode.ARTWORK
-    }
-
-    fun switchPlayerViewMode(mode: PlayerViewMode) {
-        playerViewMode = mode
-        isPlayer3DMode = (mode == PlayerViewMode.VINYL_3D)
-    }
-
-    // Control de modales inspirados en BitChord
-    fun showStatsForNerds(show: Boolean) {
-        isStatsForNerdsVisible = show
-    }
-
-    fun showSleepTimerModal(show: Boolean) {
-        isSleepTimerModalVisible = show
-    }
-
-    fun showPlaybackSpeedModal(show: Boolean) {
-        isPlaybackSpeedModalVisible = show
-    }
-
-    fun showQueueModal(show: Boolean) {
-        isQueueModalVisible = show
-    }
-
-    fun changePlaybackSpeed(speed: Float) {
-        audioEngine.setPlaybackSpeed(speed)
-    }
-
-    // Gestión interactiva de cola (Up Next Queue)
-    fun addToQueue(song: Song) {
-        audioEngine.addToQueue(song)
-    }
-
-    fun playNextInQueue(song: Song) {
-        audioEngine.playNextInQueue(song)
-    }
-
-    fun removeQueueItem(index: Int) {
-        audioEngine.removeQueueItem(index)
-    }
-
-    fun moveQueueItem(fromIndex: Int, toIndex: Int) {
-        audioEngine.moveQueueItem(fromIndex, toIndex)
-    }
-
-    fun playQueueIndex(index: Int) {
-        audioEngine.playQueueIndex(index)
-    }
-
-    fun clearQueueExceptCurrent() {
-        audioEngine.clearQueueExceptCurrent()
-    }
-
-    // Temporizador de Apagado (Sleep Timer con Desvanecimiento Gradual)
-    fun setSleepTimer(minutes: Int) {
-        sleepTimerJob?.cancel()
-        if (minutes == 0) {
-            sleepTimerRemainingSeconds = null
-            audioEngine.setVolume(1.0f)
-            return
-        }
-
-        // Caso especial: -1 = Fin de canción actual
-        if (minutes == -1) {
-            val remainingSec = ((currentSong?.durationSeconds ?: 0) - currentPositionSeconds).coerceAtLeast(1)
-            sleepTimerRemainingSeconds = remainingSec
-            sleepTimerJob = viewModelScope.launch {
-                var remaining = remainingSec
-                val originalVol = volume
-                while (remaining > 0) {
-                    delay(1000L)
-                    remaining--
-                    sleepTimerRemainingSeconds = remaining
-                    if (remaining in 1..10) {
-                        val factor = (remaining.toFloat() / 10f).coerceIn(0.1f, 1.0f)
-                        audioEngine.setVolume(originalVol * factor)
+    private fun startLocalTicker() {
+        progressJob?.cancel()
+        progressJob = viewModelScope.launch {
+            while (isActive && _isPlaying.value) {
+                delay(250)
+                val current = _playbackPositionMs.value + 250
+                val total = _durationMs.value
+                if (current >= total) {
+                    if (_isRepeat.value) {
+                        _playbackPositionMs.value = 0L
+                    } else {
+                        playNext()
                     }
-                }
-                audioEngine.pause()
-                audioEngine.setVolume(originalVol)
-                sleepTimerRemainingSeconds = null
-            }
-            return
-        }
-
-        val totalSeconds = minutes * 60
-        sleepTimerRemainingSeconds = totalSeconds
-
-        sleepTimerJob = viewModelScope.launch {
-            var remaining = totalSeconds
-            val originalVol = volume
-            while (remaining > 0) {
-                delay(1000L)
-                remaining--
-                sleepTimerRemainingSeconds = remaining
-                // Desvanecimiento suave en los últimos 10 segundos
-                if (remaining in 1..10) {
-                    val factor = (remaining.toFloat() / 10f).coerceIn(0.1f, 1.0f)
-                    audioEngine.setVolume(originalVol * factor)
+                } else {
+                    _playbackPositionMs.value = current
                 }
             }
-            audioEngine.pause()
-            audioEngine.setVolume(originalVol)
-            sleepTimerRemainingSeconds = null
         }
+    }
+
+    private fun stopLocalTicker() {
+        progressJob?.cancel()
+        progressJob = null
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        stopLocalTicker()
+        playbackManager?.release()
+        playbackManager = null
     }
 }

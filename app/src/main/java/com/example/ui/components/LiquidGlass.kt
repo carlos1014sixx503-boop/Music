@@ -53,6 +53,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.example.ui.theme.LocalDistritoTheme
 
 /**
@@ -112,6 +113,7 @@ object LiquidGlassSpheresPalette {
 fun LiquidGlassSpheresBackground(
     modifier: Modifier = Modifier,
     @DrawableRes backgroundImageRes: Int? = null,
+    backgroundUri: String? = null,
     backgroundAlpha: Float = 0.85f,
     backgroundBlurRadius: Dp = 2.dp,
     primarySphereColor: Color = LiquidGlassSpheresPalette.ElectricCyan,
@@ -171,33 +173,55 @@ fun LiquidGlassSpheresBackground(
             .fillMaxSize()
             .background(ambientDarkBackground)
     ) {
-        // Imagen artística de fondo difuminada y traslúcida (Batman) con suave transición
-        if (backgroundImageRes != null) {
+        // Imagen artística de fondo difuminada y traslúcida (Batman o personalizada del usuario)
+        val imageMod = if (backgroundBlurRadius > 0.dp) {
+            Modifier
+                .fillMaxSize()
+                .blur(radius = backgroundBlurRadius)
+                .alpha(backgroundAlpha)
+        } else {
+            Modifier
+                .fillMaxSize()
+                .alpha(backgroundAlpha)
+        }
+
+        if (!backgroundUri.isNullOrBlank()) {
+            AsyncImage(
+                model = backgroundUri,
+                contentDescription = "Fondo de Pantalla Personalizado",
+                contentScale = ContentScale.Crop,
+                modifier = imageMod
+            )
+
+            // Velo sutil traslúcido para asegurar máxima legibilidad de textos y botones
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                Color(0xFF04060A).copy(alpha = 0.28f),
+                                Color(0xFF060910).copy(alpha = 0.12f),
+                                Color(0xFF04060A).copy(alpha = 0.48f)
+                            )
+                        )
+                    )
+            )
+        } else if (backgroundImageRes != null) {
             Crossfade(
                 targetState = backgroundImageRes,
                 animationSpec = tween(durationMillis = 400),
                 label = "WallpaperCrossfade"
             ) { targetRes ->
-                val imageMod = if (backgroundBlurRadius > 0.dp) {
-                    Modifier
-                        .fillMaxSize()
-                        .blur(radius = backgroundBlurRadius)
-                        .alpha(backgroundAlpha)
-                } else {
-                    Modifier
-                        .fillMaxSize()
-                        .alpha(backgroundAlpha)
-                }
-
                 Image(
                     painter = painterResource(id = targetRes),
-                    contentDescription = "Fondo de Pantalla Batman",
+                    contentDescription = "Fondo de Pantalla",
                     contentScale = ContentScale.Crop,
                     modifier = imageMod
                 )
             }
 
-            // Velo sutil traslúcido para asegurar máxima legibilidad de textos y botones sin opacar a Batman
+            // Velo sutil traslúcido para asegurar máxima legibilidad de textos y botones
             Box(
                 modifier = Modifier
                     .fillMaxSize()

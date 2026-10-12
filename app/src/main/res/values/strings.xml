@@ -1,4 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Distrito Music 503</string>
-    <string name="playback_notification_channel_name">Reproducción Distrito Music 503</string>
+    <string name="app_name">SoundWave</string>
+    <string name="nav_home">Discover</string>
+    <string name="nav_search">Search</string>
+    <string name="nav_library">Library</string>
+    <string name="search_hint">Search songs, artists, or videos...</string>
+    <string name="play">Play</string>
+    <string name="pause">Pause</string>
+    <string name="next">Next</string>
+    <string name="previous">Previous</string>
+    <string name="now_playing">Now Playing</string>
+    <string name="queue">Queue</string>
+    <string name="favorites">Favorites</string>
+    <string name="history">History</string>
+    <string name="empty_search">Type a query to search YouTube and music library</string>
+    <string name="search_error">Unable to fetch search results. Using cached suggestions.</string>
 </resources>
