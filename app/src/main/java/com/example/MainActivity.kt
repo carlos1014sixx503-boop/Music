@@ -24,9 +24,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -53,9 +56,11 @@ import com.example.ui.components.EqualizerDspModal
 import com.example.ui.components.FullScreenPlayer
 import com.example.ui.components.YouTubeOnlineMiniBar
 import com.example.ui.components.YouTubePlayerModal
+import com.example.ui.screens.EqualizerScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.LibraryScreen
 import com.example.ui.screens.SearchScreen
+import com.example.ui.screens.SettingsScreen
 import com.example.ui.theme.BottomDockBackground
 import com.example.ui.theme.DeepVioletBackground
 import com.example.ui.theme.NeonOrbCyan
@@ -137,14 +142,22 @@ fun MainAppContent(playerState: MusicPlayerState = viewModel()) {
                 when (targetScreen) {
                     0 -> HomeScreen(
                         playerState = playerState,
-                        onNavigateToSearch = { selectedScreen = 2 },
-                        onNavigateToLibrary = { selectedScreen = 1 }
+                        onNavigateToSearch = { selectedScreen = 1 },
+                        onNavigateToLibrary = { selectedScreen = 2 },
+                        onNavigateToEqualizer = { selectedScreen = 3 },
+                        onNavigateToSettings = { selectedScreen = 4 }
                     )
-                    1 -> LibraryScreen(
+                    1 -> SearchScreen(
+                        playerState = playerState
+                    )
+                    2 -> LibraryScreen(
                         playerState = playerState,
-                        onNavigateToSearch = { selectedScreen = 2 }
+                        onNavigateToSearch = { selectedScreen = 1 }
                     )
-                    2 -> SearchScreen(
+                    3 -> EqualizerScreen(
+                        playerState = playerState
+                    )
+                    4 -> SettingsScreen(
                         playerState = playerState
                     )
                 }
@@ -156,13 +169,13 @@ fun MainAppContent(playerState: MusicPlayerState = viewModel()) {
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .navigationBarsPadding()
-                    .padding(bottom = 12.dp),
+                    .padding(bottom = 10.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 // Persistent Mini Player (Tap to expand to Screen 3 FullScreenPlayer)
                 YouTubeOnlineMiniBar(
                     playerState = playerState,
-                    modifier = Modifier.padding(bottom = 8.dp)
+                    modifier = Modifier.padding(bottom = 6.dp)
                 )
 
                 // Floating Pill Navigation Dock with 3D Glowing Neon Orb from reference mockup
@@ -214,6 +227,7 @@ fun MainAppContent(playerState: MusicPlayerState = viewModel()) {
  * Floating Pill Navigation Dock matching reference mockup:
  * - Ultra-glossy black liquid capsule with soft glass rim.
  * - Glowing 3D radial neon orb behind the active icon.
+ * - 5 authentic destinations: Inicio, Búsqueda YouTube, Música Local, Ecualizador, Ajustes.
  */
 @Composable
 fun FloatingNavigationDock(
@@ -243,32 +257,53 @@ fun FloatingNavigationDock(
     ) {
         Row(
             modifier = Modifier
-                .padding(horizontal = 14.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                .padding(horizontal = 10.dp, vertical = 5.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // 1: Inicio / Tendencias
             DockItem(
                 icon = Icons.Default.Home,
-                contentDescription = "Home",
+                contentDescription = "Inicio",
                 isSelected = selectedScreen == 0,
                 onClick = { onSelectScreen(0) },
                 testTag = "nav_item_home"
             )
 
+            // 2: Búsqueda YouTube
             DockItem(
-                icon = Icons.Default.MusicNote,
-                contentDescription = "Library",
+                icon = Icons.Default.Search,
+                contentDescription = "Búsqueda YouTube",
                 isSelected = selectedScreen == 1,
                 onClick = { onSelectScreen(1) },
+                testTag = "nav_item_search"
+            )
+
+            // 3: Escaneo de Música Local / Carpetas A-Z
+            DockItem(
+                icon = Icons.Default.FolderOpen,
+                contentDescription = "Música Local",
+                isSelected = selectedScreen == 2,
+                onClick = { onSelectScreen(2) },
                 testTag = "nav_item_library"
             )
 
+            // 4: Ecualizador DSP
             DockItem(
                 icon = Icons.Default.GraphicEq,
-                contentDescription = "Search",
-                isSelected = selectedScreen == 2,
-                onClick = { onSelectScreen(2) },
-                testTag = "nav_item_search"
+                contentDescription = "Ecualizador",
+                isSelected = selectedScreen == 3,
+                onClick = { onSelectScreen(3) },
+                testTag = "nav_item_equalizer"
+            )
+
+            // 5: Sincronización y Ajustes
+            DockItem(
+                icon = Icons.Default.Settings,
+                contentDescription = "Ajustes",
+                isSelected = selectedScreen == 4,
+                onClick = { onSelectScreen(4) },
+                testTag = "nav_item_settings"
             )
         }
     }

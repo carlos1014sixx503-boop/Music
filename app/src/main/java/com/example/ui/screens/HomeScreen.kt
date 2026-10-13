@@ -77,6 +77,8 @@ fun HomeScreen(
     playerState: MusicPlayerState,
     onNavigateToSearch: () -> Unit,
     onNavigateToLibrary: () -> Unit = {},
+    onNavigateToEqualizer: () -> Unit = {},
+    onNavigateToSettings: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val playlist by playerState.playlist.collectAsState()
@@ -107,13 +109,14 @@ fun HomeScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Profile Avatar Alex with glowing neon purple halo
+                // Profile Avatar Alex with glowing neon purple halo (tap to go to Settings & Account)
                 Box(
                     modifier = Modifier
                         .size(48.dp)
                         .shadow(12.dp, CircleShape, ambientColor = NeonPurple, spotColor = NeonPurple)
                         .clip(CircleShape)
                         .border(1.8.dp, NeonPurple, CircleShape)
+                        .clickable { onNavigateToSettings() }
                         .testTag("home_avatar_alex"),
                     contentAlignment = Alignment.Center
                 ) {
@@ -170,7 +173,7 @@ fun HomeScreen(
                                 ),
                                 CircleShape
                             )
-                            .clickable { playerState.showEqualizer() }
+                            .clickable { onNavigateToEqualizer() }
                             .testTag("home_equalizer_icon_btn"),
                         contentAlignment = Alignment.Center
                     ) {
@@ -182,7 +185,7 @@ fun HomeScreen(
                         )
                     }
 
-                    // Bell Circle Button
+                    // Bell Circle Button (Ajustes y Cuenta)
                     Box(
                         modifier = Modifier
                             .size(44.dp)
@@ -198,7 +201,7 @@ fun HomeScreen(
                                 ),
                                 CircleShape
                             )
-                            .clickable { /* Notification clicked */ }
+                            .clickable { onNavigateToSettings() }
                             .testTag("home_bell_icon_btn"),
                         contentAlignment = Alignment.Center
                     ) {
