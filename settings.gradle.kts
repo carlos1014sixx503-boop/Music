@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "SoundWave"
+rootProject.name = "Distrito music 503"
 include(":app")

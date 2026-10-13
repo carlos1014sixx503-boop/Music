@@ -109,23 +109,64 @@ fun HomeScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Profile Avatar Alex with glowing neon purple halo (tap to go to Settings & Account)
-                Box(
-                    modifier = Modifier
-                        .size(48.dp)
-                        .shadow(12.dp, CircleShape, ambientColor = NeonPurple, spotColor = NeonPurple)
-                        .clip(CircleShape)
-                        .border(1.8.dp, NeonPurple, CircleShape)
-                        .clickable { onNavigateToSettings() }
-                        .testTag("home_avatar_alex"),
-                    contentAlignment = Alignment.Center
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Image(
-                        painter = painterResource(id = R.drawable.img_avatar_alex),
-                        contentDescription = "Alex Avatar",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
+                    // Profile Avatar Alex with glowing neon purple halo (tap to go to Settings & Account)
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .shadow(12.dp, CircleShape, ambientColor = NeonPurple, spotColor = NeonPurple)
+                            .clip(CircleShape)
+                            .border(1.8.dp, NeonPurple, CircleShape)
+                            .clickable { onNavigateToSettings() }
+                            .testTag("home_avatar_alex"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Image(
+                            painter = painterResource(id = R.drawable.img_avatar_alex),
+                            contentDescription = "Alex Avatar",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+
+                    // Logo y Marca Distrito Music 503
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(CircleShape)
+                                .border(1.dp, NeonPurple, CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Image(
+                                painter = painterResource(id = R.drawable.distrito_logo),
+                                contentDescription = "Distrito Music 503 Logo",
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+
+                        Column {
+                            Text(
+                                text = "Distrito music 503",
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp
+                                ),
+                                color = TextWhite
+                            )
+                            Text(
+                                text = "Tendencias & Audio DSP",
+                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
+                                color = NeonPurpleLight
+                            )
+                        }
+                    }
                 }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {

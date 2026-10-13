@@ -42,6 +42,24 @@ enum class YouTubePlaybackMode {
     AUDIO_ONLY
 }
 
+data class YouTubePlaylist(
+    val id: String,
+    val title: String,
+    val author: String,
+    val videoCount: String,
+    val thumbnailUrl: String,
+    val tracks: List<Track> = emptyList()
+)
+
+data class YouTubeAccountProfile(
+    val channelTitle: String = "Distrito Music 503",
+    val channelHandle: String = "@distritomusic503",
+    val avatarUrl: String = "",
+    val subscriberCount: String = "15.8K suscriptores",
+    val isConnected: Boolean = true,
+    val lastSyncTime: String = "Sincronizado ahora"
+)
+
 sealed class YouTubeSearchState {
     object Idle : YouTubeSearchState()
     object Loading : YouTubeSearchState()

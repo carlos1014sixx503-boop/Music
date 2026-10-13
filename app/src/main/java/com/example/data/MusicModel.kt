@@ -37,6 +37,20 @@ data class Song(
         }
 }
 
+fun Song.toTrack(): com.example.data.model.Track {
+    return com.example.data.model.Track(
+        id = this.id,
+        title = this.title,
+        artist = this.artist,
+        durationMs = (this.durationSeconds * 1000L).coerceAtLeast(1000L),
+        albumArtUrl = this.albumArtUri ?: "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=600&auto=format&fit=crop&q=80",
+        isOnline = false,
+        audioUrl = if (this.contentUri.isNotBlank()) this.contentUri else this.filePath,
+        genre = this.genre,
+        isFavorite = this.isFavorite
+    )
+}
+
 data class Album(
     val id: String,
     val title: String,

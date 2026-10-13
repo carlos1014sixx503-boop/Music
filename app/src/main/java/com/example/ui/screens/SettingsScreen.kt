@@ -36,6 +36,9 @@ import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PlaylistPlay
+import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
@@ -49,16 +52,20 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import coil.compose.AsyncImage
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -76,6 +83,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.state.MusicPlayerState
+import com.example.ui.theme.DeepVioletCard
 import com.example.ui.theme.GlassSurfaceHigh
 import com.example.ui.theme.GlassSurfaceUltraDark
 import com.example.ui.theme.NeonPurple
@@ -102,9 +110,13 @@ fun SettingsScreen(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
+    val userProfile by playerState.userAccountProfile.collectAsState()
+    val userPlaylists by playerState.userPlaylists.collectAsState()
+    var channelHandleInput by remember { mutableStateOf(userProfile.channelHandle) }
+
     var isSyncing by remember { mutableStateOf(false) }
     var syncStatusText by remember { mutableStateOf("Sincronizado recientemente") }
-    var lastSyncTimestamp by remember { mutableStateOf("Hace 2 minutos") }
+    var lastSyncTimestamp by remember { mutableStateOf("Hace un momento") }
 
     // Preferencias de Streaming y Audio
     var selectedAudioQualityIndex by remember { mutableIntStateOf(0) } // 0: 320 kbps, 1: 256 kbps, 2: 128 kbps
@@ -131,12 +143,13 @@ fun SettingsScreen(
     fun performYouTubeSync() {
         coroutineScope.launch {
             isSyncing = true
-            syncStatusText = "Sincronizando listas y favoritos de YouTube..."
-            delay(1500)
+            syncStatusText = "Sincronizando playlists y cuenta de YouTube..."
+            playerState.syncYouTubeAccount(channelHandleInput)
+            delay(1000)
             isSyncing = false
             lastSyncTimestamp = "Hace unos segundos"
             syncStatusText = "Sincronización exitosa con YouTube"
-            Toast.makeText(context, "Cuenta de YouTube sincronizada: 18 playlists actualizadas", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "¡Cuenta de YouTube sincronizada! ${userPlaylists.size} playlists listas", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -282,7 +295,7 @@ fun SettingsScreen(
                                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
                                     Text(
-                                        text = "Alex Martinez",
+                                        text = userProfile.channelTitle,
                                         style = MaterialTheme.typography.titleMedium.copy(
                                             fontWeight = FontWeight.Bold,
                                             fontSize = 16.sp
@@ -297,7 +310,7 @@ fun SettingsScreen(
                                     )
                                 }
                                 Text(
-                                    text = "alex.music@gmail.com",
+                                    text = "${userProfile.channelHandle} • ${userProfile.subscriberCount}",
                                     style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
                                     color = TextMuted
                                 )
@@ -312,7 +325,7 @@ fun SettingsScreen(
                                 .padding(horizontal = 8.dp, vertical = 4.dp)
                         ) {
                             Text(
-                                text = "Activo",
+                                text = if (userProfile.isConnected) "Sincronizado" else "Pendiente",
                                 style = MaterialTheme.typography.labelSmall.copy(
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 11.sp
@@ -324,6 +337,30 @@ fun SettingsScreen(
 
                     Spacer(modifier = Modifier.height(14.dp))
 
+                    // Campo para editar el usuario / canal de YouTube
+                    OutlinedTextField(
+                        value = channelHandleInput,
+                        onValueChange = { channelHandleInput = it },
+                        label = { Text("Usuario o Canal de YouTube (@tu_canal)") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("input_youtube_channel_handle"),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = NeonPurple,
+                            unfocusedBorderColor = Color(0x66A855F7),
+                            focusedContainerColor = DeepVioletCard,
+                            unfocusedContainerColor = DeepVioletCard,
+                            focusedTextColor = TextWhite,
+                            unfocusedTextColor = TextWhite,
+                            focusedLabelColor = NeonPurpleLight,
+                            unfocusedLabelColor = TextMuted
+                        )
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
                     // Estadísticas de sincronización en la nube
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -331,17 +368,17 @@ fun SettingsScreen(
                     ) {
                         SyncMetricBox(
                             title = "Playlists",
-                            value = "18",
+                            value = userPlaylists.size.toString(),
                             modifier = Modifier.weight(1f)
                         )
                         SyncMetricBox(
-                            title = "Me Gusta",
-                            value = "142",
+                            title = "Suscriptores",
+                            value = userProfile.subscriberCount.substringBefore(" "),
                             modifier = Modifier.weight(1f)
                         )
                         SyncMetricBox(
-                            title = "Suscripciones",
-                            value = "45",
+                            title = "Estado",
+                            value = "Online",
                             modifier = Modifier.weight(1f)
                         )
                     }
@@ -626,20 +663,39 @@ fun SettingsScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
-                        Text(
-                            text = "Distrito Music Player",
-                            style = MaterialTheme.typography.bodyMedium.copy(
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp
-                            ),
-                            color = TextWhite
-                        )
-                        Text(
-                            text = "Versión 2.5.0 Pro • Edición Liquid Glass",
-                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
-                            color = TextMuted
-                        )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(42.dp)
+                                .clip(CircleShape)
+                                .border(1.dp, NeonPurple, CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Image(
+                                painter = painterResource(id = com.example.R.drawable.distrito_logo),
+                                contentDescription = "Distrito Music 503 Logo",
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+
+                        Column {
+                            Text(
+                                text = "Distrito music 503",
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp
+                                ),
+                                color = TextWhite
+                            )
+                            Text(
+                                text = "El Salvador • Edición Liquid Glass VIP",
+                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                                color = TextMuted
+                            )
+                        }
                     }
 
                     Box(

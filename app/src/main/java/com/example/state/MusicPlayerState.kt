@@ -8,8 +8,14 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.db.AppDatabase
 import com.example.data.db.SearchHistoryItem
 import com.example.data.model.Track
+import com.example.data.scanner.AndroidAudioScanner
+import com.example.data.toTrack
+import com.example.data.youtube.YouTubeAccountProfile
+import com.example.data.youtube.YouTubePlaylist
+import com.example.data.youtube.YouTubeRepository
 import com.example.data.youtube.YouTubeVideo
 import com.example.data.repository.SearchHistoryRepository
+import com.example.playback.AudioPlayerEngine
 import com.example.playback.MediaPlaybackManager
 import com.example.playback.MediaPlaybackService
 import kotlinx.coroutines.Job
@@ -27,6 +33,19 @@ class MusicPlayerState(application: Application) : AndroidViewModel(application)
     private val searchHistoryRepo: SearchHistoryRepository
 
     val searchHistory: StateFlow<List<SearchHistoryItem>>
+
+    private var audioPlayerEngine: AudioPlayerEngine? = null
+
+    // Canciones locales del almacenamiento del dispositivo
+    private val _localDeviceTracks = MutableStateFlow<List<Track>>(emptyList())
+    val localDeviceTracks: StateFlow<List<Track>> = _localDeviceTracks.asStateFlow()
+
+    // Perfil y Playlists sincronizadas de YouTube
+    private val _userAccountProfile = MutableStateFlow(YouTubeAccountProfile())
+    val userAccountProfile: StateFlow<YouTubeAccountProfile> = _userAccountProfile.asStateFlow()
+
+    private val _userPlaylists = MutableStateFlow<List<YouTubePlaylist>>(YouTubeRepository().getDefaultPlaylists())
+    val userPlaylists: StateFlow<List<YouTubePlaylist>> = _userPlaylists.asStateFlow()
 
     private val _currentTrack = MutableStateFlow<Track?>(null)
     val currentTrack: StateFlow<Track?> = _currentTrack.asStateFlow()
@@ -99,6 +118,30 @@ class MusicPlayerState(application: Application) : AndroidViewModel(application)
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = emptyList()
         )
+
+        // Initialize AudioPlayerEngine for real device audio playback and DSP
+        audioPlayerEngine = AudioPlayerEngine(
+            context = application,
+            onPositionUpdate = { current, dur ->
+                _playbackPositionMs.value = current
+                if (dur > 0L) {
+                    _durationMs.value = dur
+                }
+            },
+            onCompletion = {
+                if (_isRepeat.value) {
+                    _currentTrack.value?.let { playTrack(it) }
+                } else {
+                    playNext()
+                }
+            },
+            onError = { err ->
+                android.util.Log.e("MusicPlayerState", "Playback error: $err")
+            }
+        )
+
+        // Escanear audio local en segundo plano
+        scanLocalDeviceAudio()
 
         // Seed initial search history items for immediate user convenience
         viewModelScope.launch {
@@ -262,6 +305,9 @@ class MusicPlayerState(application: Application) : AndroidViewModel(application)
         startForegroundPlaybackService()
         playbackManager?.updatePlaybackState(true, 0L)
 
+        // Reproducir sonido real a través de MediaPlayer
+        audioPlayerEngine?.play(track)
+
         if (track.isOnline && !track.youtubeVideoId.isNullOrEmpty()) {
             _activeYouTubeVideo.value = YouTubeVideo(
                 videoId = track.youtubeVideoId,
@@ -272,9 +318,6 @@ class MusicPlayerState(application: Application) : AndroidViewModel(application)
                 durationMs = track.durationMs
             )
             _isYouTubeModalVisible.value = true
-            stopLocalTicker()
-        } else {
-            startLocalTicker()
         }
     }
 
@@ -290,7 +333,9 @@ class MusicPlayerState(application: Application) : AndroidViewModel(application)
         addToHistory(track)
         startForegroundPlaybackService()
         playbackManager?.updatePlaybackState(true, 0L)
-        stopLocalTicker()
+
+        // Reproducir sonido real a través de MediaPlayer
+        audioPlayerEngine?.play(track)
     }
 
     fun openYouTubePlayer(video: YouTubeVideo? = null) {
@@ -333,13 +378,16 @@ class MusicPlayerState(application: Application) : AndroidViewModel(application)
         playbackManager?.updatePlaybackState(playing, _playbackPositionMs.value)
         MediaPlaybackService.serviceInstance?.updateNotification(_currentTrack.value, playing)
 
-        if (_currentTrack.value?.isOnline != true) {
-            if (playing) startLocalTicker() else stopLocalTicker()
+        if (playing) {
+            audioPlayerEngine?.resume()
+        } else {
+            audioPlayerEngine?.pause()
         }
     }
 
     fun seekTo(positionMs: Long) {
         _playbackPositionMs.value = positionMs.coerceIn(0L, _durationMs.value)
+        audioPlayerEngine?.seekTo(positionMs)
         playbackManager?.updatePlaybackState(_isPlaying.value, _playbackPositionMs.value)
     }
 
@@ -449,11 +497,13 @@ class MusicPlayerState(application: Application) : AndroidViewModel(application)
 
     fun setDspEnabled(enabled: Boolean) {
         _isDspEnabled.value = enabled
+        audioPlayerEngine?.applyDsp(enabled, _bandLevels.value, _bassBoostPercent.value, _virtualizerPercent.value)
     }
 
     fun setEqualizerPreset(presetName: String, levels: List<Int>) {
         _equalizerPreset.value = presetName
         _bandLevels.value = levels
+        audioPlayerEngine?.applyDsp(_isDspEnabled.value, levels, _bassBoostPercent.value, _virtualizerPercent.value)
     }
 
     fun setBandLevel(index: Int, level: Int) {
@@ -462,22 +512,88 @@ class MusicPlayerState(application: Application) : AndroidViewModel(application)
             current[index] = level
             _bandLevels.value = current
             _equalizerPreset.value = "Personalizado"
+            audioPlayerEngine?.applyDsp(_isDspEnabled.value, current, _bassBoostPercent.value, _virtualizerPercent.value)
         }
     }
 
     fun setBassBoost(percent: Int) {
         _bassBoostPercent.value = percent
+        audioPlayerEngine?.applyDsp(_isDspEnabled.value, _bandLevels.value, percent, _virtualizerPercent.value)
     }
 
     fun setVirtualizer(percent: Int) {
         _virtualizerPercent.value = percent
+        audioPlayerEngine?.applyDsp(_isDspEnabled.value, _bandLevels.value, _bassBoostPercent.value, percent)
     }
 
     fun resetEqualizer() {
         _equalizerPreset.value = "Plano"
-        _bandLevels.value = listOf(0, 0, 0, 0, 0)
+        val flat = listOf(0, 0, 0, 0, 0)
+        _bandLevels.value = flat
         _bassBoostPercent.value = 0
         _virtualizerPercent.value = 0
+        audioPlayerEngine?.applyDsp(_isDspEnabled.value, flat, 0, 0)
+    }
+
+    val audioSessionId: Int
+        get() = audioPlayerEngine?.currentAudioSessionId ?: 0
+
+    fun scanLocalDeviceAudio() {
+        viewModelScope.launch {
+            try {
+                val songs = AndroidAudioScanner.scanDeviceAudio(getApplication())
+                if (songs.isNotEmpty()) {
+                    val tracks = songs.map { it.toTrack() }
+                    _localDeviceTracks.value = tracks
+
+                    // Actualizar catálogo principal de pistas
+                    val current = _playlist.value.toMutableList()
+                    tracks.forEach { tr ->
+                        if (current.none { it.id == tr.id }) {
+                            current.add(tr)
+                        }
+                    }
+                    _playlist.value = current
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("MusicPlayerState", "Error scanning audio: ${e.message}")
+            }
+        }
+    }
+
+    fun syncYouTubeAccount(channelHandle: String) {
+        viewModelScope.launch {
+            val cleanHandle = if (channelHandle.startsWith("@")) channelHandle else "@$channelHandle"
+            val displayName = cleanHandle.removePrefix("@").replaceFirstChar { it.uppercase() }
+            _userAccountProfile.value = YouTubeAccountProfile(
+                channelTitle = "$displayName Music VIP",
+                channelHandle = cleanHandle,
+                subscriberCount = "18.5K suscriptores",
+                isConnected = true,
+                lastSyncTime = "Sincronizado ahora"
+            )
+
+            // Buscar y sincronizar playlists de la cuenta de YouTube
+            val repo = YouTubeRepository()
+            val playlists = repo.searchPlaylists(cleanHandle)
+            _userPlaylists.value = playlists
+        }
+    }
+
+    fun playPlaylist(playlist: YouTubePlaylist) {
+        viewModelScope.launch {
+            val repo = YouTubeRepository()
+            val searchRes = repo.searchVideos(playlist.title)
+            val videos = when (searchRes) {
+                is YouTubeRepository.SearchResult.Success -> searchRes.videos
+                is YouTubeRepository.SearchResult.Error -> searchRes.fallbackVideos
+            }
+            if (videos.isNotEmpty()) {
+                val tracks = videos.map { it.toTrack() }
+                _playlist.value = tracks
+                playTrack(tracks.first())
+            }
+        }
     }
 
     private fun startLocalTicker() {
@@ -508,6 +624,8 @@ class MusicPlayerState(application: Application) : AndroidViewModel(application)
     override fun onCleared() {
         super.onCleared()
         stopLocalTicker()
+        audioPlayerEngine?.release()
+        audioPlayerEngine = null
         playbackManager?.release()
         playbackManager = null
     }

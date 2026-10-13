@@ -1,6 +1,12 @@
 package com.example.ui.screens
 
+import android.Manifest
+import android.os.Build
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import com.example.util.AudioPermissionHelper
+import com.example.data.toTrack
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -117,94 +123,14 @@ fun LibraryScreen(
     var searchQuery by remember { mutableStateOf("") }
     val expandedFolders = remember { mutableStateMapOf<String, Boolean>() }
 
-    // Generar colección enriquecida de canciones locales a partir de SampleMusicData y catálogo
-    val localSongs = remember {
-        val sampleList = SampleMusicData.sampleSongs.map { song ->
-            Track(
-                id = song.id,
-                title = song.title,
-                artist = song.artist,
-                durationMs = (song.durationSeconds * 1000L),
-                albumArtUrl = song.albumArtUri ?: "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=600&auto=format&fit=crop&q=80",
-                genre = song.genre,
-                isOnline = false
-            )
+    // Colección de canciones locales obtenidas del escáner real del dispositivo
+    val scannedDeviceTracks by playerState.localDeviceTracks.collectAsState()
+    val localSongs = remember(scannedDeviceTracks) {
+        if (scannedDeviceTracks.isNotEmpty()) {
+            scannedDeviceTracks
+        } else {
+            SampleMusicData.sampleSongs.map { it.toTrack() }
         }
-        val extraCurated = listOf(
-            Track(
-                id = "loc_blinding_lights",
-                title = "Blinding Lights",
-                artist = "The Weeknd",
-                durationMs = 179000L,
-                albumArtUrl = "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=600&auto=format&fit=crop&q=80",
-                genre = "Pop / Synth",
-                isOnline = false
-            ),
-            Track(
-                id = "loc_save_your_tears",
-                title = "Save Your Tears",
-                artist = "The Weeknd",
-                durationMs = 215000L,
-                albumArtUrl = "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=600&auto=format&fit=crop&q=80",
-                genre = "Pop",
-                isOnline = false
-            ),
-            Track(
-                id = "loc_happier_than_ever",
-                title = "Happier Than Ever",
-                artist = "Billie Eilish",
-                durationMs = 297000L,
-                albumArtUrl = "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=600&auto=format&fit=crop&q=80",
-                genre = "Alternative",
-                isOnline = false
-            ),
-            Track(
-                id = "loc_sunflower",
-                title = "Sunflower",
-                artist = "Post Malone",
-                durationMs = 160000L,
-                albumArtUrl = "https://images.unsplash.com/photo-1501386761578-eac5c94b800a?w=600&auto=format&fit=crop&q=80",
-                genre = "Hip-Hop",
-                isOnline = false
-            ),
-            Track(
-                id = "loc_believer",
-                title = "Believer",
-                artist = "Imagine Dragons",
-                durationMs = 205000L,
-                albumArtUrl = "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=600&auto=format&fit=crop&q=80",
-                genre = "Rock",
-                isOnline = false
-            ),
-            Track(
-                id = "loc_positions",
-                title = "Positions",
-                artist = "Ariana Grande",
-                durationMs = 182000L,
-                albumArtUrl = "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=600&auto=format&fit=crop&q=80",
-                genre = "R&B",
-                isOnline = false
-            ),
-            Track(
-                id = "loc_shivers",
-                title = "Shivers",
-                artist = "Ed Sheeran",
-                durationMs = 208000L,
-                albumArtUrl = "https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=600&auto=format&fit=crop&q=80",
-                genre = "Pop",
-                isOnline = false
-            ),
-            Track(
-                id = "loc_ghost",
-                title = "Ghost",
-                artist = "Justin Bieber",
-                durationMs = 192000L,
-                albumArtUrl = "https://images.unsplash.com/photo-1520523839898-507127cd53c3?w=600&auto=format&fit=crop&q=80",
-                genre = "Pop",
-                isOnline = false
-            )
-        )
-        sampleList + extraCurated
     }
 
     // Filtrar canciones locales según búsqueda
@@ -258,23 +184,40 @@ fun LibraryScreen(
         label = "rotation"
     )
 
-    fun startScan() {
+    fun executeScanInternal() {
         coroutineScope.launch {
             isScanning = true
             scanMessage = "Escaneando almacenamiento y carpetas..."
             try {
-                // Ejecución real del escáner en MediaStore
+                playerState.scanLocalDeviceAudio()
                 val scanned = AndroidAudioScanner.scanDeviceAudio(context)
-                delay(1400) // Feedback visual agradable
-                val count = if (scanned.isNotEmpty()) scanned.size else localSongs.size
+                val count = scanned.size
                 scanMessage = "¡Escaneo completado! $count canciones locales encontradas"
                 Toast.makeText(context, "Escaneo finalizado: $count archivos listos", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
-                delay(800)
-                scanMessage = "¡Escaneo completado! ${localSongs.size} canciones indexadas"
+                scanMessage = "¡Escaneo completado!"
             } finally {
                 isScanning = false
             }
+        }
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { _ ->
+        executeScanInternal()
+    }
+
+    fun startScan() {
+        if (AudioPermissionHelper.hasPermission(context)) {
+            executeScanInternal()
+        } else {
+            val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                arrayOf(Manifest.permission.READ_MEDIA_AUDIO)
+            } else {
+                arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+            }
+            permissionLauncher.launch(permissions)
         }
     }
 
