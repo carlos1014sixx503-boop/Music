@@ -10,7 +10,9 @@ data class Track(
     val youtubeVideoId: String? = null,
     val audioUrl: String? = null,
     val genre: String = "Pop",
-    val isFavorite: Boolean = false
+    val isFavorite: Boolean = false,
+    val folderName: String = "Música",
+    val folderPath: String = ""
 ) {
     val durationFormatted: String
         get() {
@@ -20,3 +22,4 @@ data class Track(
             return String.format("%02d:%02d", minutes, seconds)
         }
 }
+

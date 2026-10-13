@@ -57,10 +57,12 @@ object DemoAudioProvider {
 
                 fos.write(header.array())
 
-                // Generación de acordes synthwave armónicos (La menor: A, C, E con bajo pulsante)
+                // Generación de progresión de acordes musicales suaves Lo-Fi / Synthwave (sin pulsos de radar)
                 val buffer = ByteBuffer.allocate(4096).order(ByteOrder.LITTLE_ENDIAN)
-                val baseFreqs = doubleArrayOf(220.0, 261.63, 329.63, 440.0) // A3, C4, E4, A4
-                val bassFreq = 110.0 // A2 bajo
+                // Acordes: Dm7 (293, 349, 440, 523) -> Cmaj7 (261, 329, 392, 493) -> Am7 (220, 261, 329, 392)
+                val chordD = doubleArrayOf(146.83, 293.66, 349.23, 440.0, 523.25)
+                val chordC = doubleArrayOf(130.81, 261.63, 329.63, 392.0, 493.88)
+                val chordA = doubleArrayOf(110.00, 220.00, 261.63, 329.63, 440.0)
 
                 var sampleIndex = 0
                 while (sampleIndex < totalSamples) {
@@ -69,20 +71,28 @@ object DemoAudioProvider {
 
                     for (i in 0 until chunkSize) {
                         val t = (sampleIndex + i).toDouble() / SAMPLE_RATE
-
-                        // Pulso rítmico suave estilo Synthwave / Lo-Fi 503
-                        val rhythmEnvelope = 0.6 + 0.4 * sin(2.0 * Math.PI * 2.0 * t) // 120 BPM
-                        val bass = sin(2.0 * Math.PI * bassFreq * t) * 0.4
-
-                        // Acordes ambientales armónicos
-                        var chord = 0.0
-                        for (freq in baseFreqs) {
-                            chord += sin(2.0 * Math.PI * freq * t) * 0.15
+                        // Progresión cada 6 segundos
+                        val chordPhase = (t % 18.0)
+                        val activeChord = when {
+                            chordPhase < 6.0 -> chordD
+                            chordPhase < 12.0 -> chordC
+                            else -> chordA
                         }
 
-                        // Canal Izquierdo y Derecho con ligera modulación estéreo
-                        val sampleLeft = ((bass + chord * rhythmEnvelope) * 16000.0).toInt().coerceIn(-32767, 32767).toShort()
-                        val sampleRight = ((bass + chord * (0.6 + 0.4 * sin(2.0 * Math.PI * 2.0 * t + 0.5))) * 16000.0).toInt().coerceIn(-32767, 32767).toShort()
+                        // Acordes suaves con desvanecimiento gradual armónico
+                        var pad = 0.0
+                        for (freq in activeChord) {
+                            pad += sin(2.0 * Math.PI * freq * t) * 0.12
+                            // Armónico superior sutil para calidez musical
+                            pad += sin(2.0 * Math.PI * (freq * 2.0) * t) * 0.03
+                        }
+
+                        // Ondulación lenta estéreo tipo chorus/reverb de 0.2 Hz (no pulsos de radar)
+                        val slowLfo = 0.85 + 0.15 * sin(2.0 * Math.PI * 0.15 * t)
+                        val slowLfoR = 0.85 + 0.15 * sin(2.0 * Math.PI * 0.15 * t + 1.2)
+
+                        val sampleLeft = ((pad * slowLfo) * 14000.0).toInt().coerceIn(-32767, 32767).toShort()
+                        val sampleRight = ((pad * slowLfoR) * 14000.0).toInt().coerceIn(-32767, 32767).toShort()
 
                         buffer.putShort(sampleLeft)
                         buffer.putShort(sampleRight)

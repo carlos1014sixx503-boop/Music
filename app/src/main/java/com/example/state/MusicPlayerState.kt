@@ -277,6 +277,9 @@ class MusicPlayerState(application: Application) : AndroidViewModel(application)
         service.onPreviousAction = { playPrevious() }
     }
 
+    var onYouTubePlayPauseRequested: ((Boolean) -> Unit)? = null
+    var onYouTubeSeekRequested: ((Float) -> Unit)? = null
+
     private fun startForegroundPlaybackService() {
         try {
             val app = getApplication<Application>()
@@ -288,6 +291,7 @@ class MusicPlayerState(application: Application) : AndroidViewModel(application)
             }
             MediaPlaybackService.serviceInstance?.let { service ->
                 setupServiceCallbacks(service)
+                service.mediaSessionToken = playbackManager?.sessionToken
                 service.updateNotification(_currentTrack.value, _isPlaying.value)
             }
         } catch (e: Exception) {
@@ -303,14 +307,16 @@ class MusicPlayerState(application: Application) : AndroidViewModel(application)
 
         addToHistory(track)
         startForegroundPlaybackService()
+        playbackManager?.updateTrack(track)
         playbackManager?.updatePlaybackState(true, 0L)
 
-        // Reproducir sonido real a través de MediaPlayer
-        audioPlayerEngine?.play(track)
+        val isYouTube = track.isOnline || !track.youtubeVideoId.isNullOrEmpty()
 
-        if (track.isOnline && !track.youtubeVideoId.isNullOrEmpty()) {
+        if (isYouTube) {
+            // Detener el motor local para evitar ruidos sintéticos y delegar en el streaming de YouTube
+            audioPlayerEngine?.pause()
             _activeYouTubeVideo.value = YouTubeVideo(
-                videoId = track.youtubeVideoId,
+                videoId = track.youtubeVideoId ?: "",
                 title = track.title,
                 channelTitle = track.artist,
                 thumbnailUrl = track.albumArtUrl,
@@ -318,6 +324,10 @@ class MusicPlayerState(application: Application) : AndroidViewModel(application)
                 durationMs = track.durationMs
             )
             _isYouTubeModalVisible.value = true
+            onYouTubePlayPauseRequested?.invoke(true)
+        } else {
+            // Reproducir archivo de audio real local con MediaPlayer
+            audioPlayerEngine?.play(track)
         }
     }
 
@@ -332,10 +342,12 @@ class MusicPlayerState(application: Application) : AndroidViewModel(application)
 
         addToHistory(track)
         startForegroundPlaybackService()
+        playbackManager?.updateTrack(track)
         playbackManager?.updatePlaybackState(true, 0L)
 
-        // Reproducir sonido real a través de MediaPlayer
-        audioPlayerEngine?.play(track)
+        // Detener motor local para evitar interferencias
+        audioPlayerEngine?.pause()
+        onYouTubePlayPauseRequested?.invoke(true)
     }
 
     fun openYouTubePlayer(video: YouTubeVideo? = null) {
@@ -378,16 +390,26 @@ class MusicPlayerState(application: Application) : AndroidViewModel(application)
         playbackManager?.updatePlaybackState(playing, _playbackPositionMs.value)
         MediaPlaybackService.serviceInstance?.updateNotification(_currentTrack.value, playing)
 
-        if (playing) {
-            audioPlayerEngine?.resume()
+        val isYouTube = _currentTrack.value?.isOnline == true || !_currentTrack.value?.youtubeVideoId.isNullOrEmpty()
+        if (isYouTube) {
+            onYouTubePlayPauseRequested?.invoke(playing)
         } else {
-            audioPlayerEngine?.pause()
+            if (playing) {
+                audioPlayerEngine?.resume()
+            } else {
+                audioPlayerEngine?.pause()
+            }
         }
     }
 
     fun seekTo(positionMs: Long) {
         _playbackPositionMs.value = positionMs.coerceIn(0L, _durationMs.value)
-        audioPlayerEngine?.seekTo(positionMs)
+        val isYouTube = _currentTrack.value?.isOnline == true || !_currentTrack.value?.youtubeVideoId.isNullOrEmpty()
+        if (isYouTube) {
+            onYouTubeSeekRequested?.invoke(positionMs / 1000f)
+        } else {
+            audioPlayerEngine?.seekTo(positionMs)
+        }
         playbackManager?.updatePlaybackState(_isPlaying.value, _playbackPositionMs.value)
     }
 

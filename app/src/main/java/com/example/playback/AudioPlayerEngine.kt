@@ -51,6 +51,12 @@ class AudioPlayerEngine(
         stopProgressTracker()
         releasePlayer()
 
+        // Pistas online de YouTube se reproducen a través del motor de streaming de YouTube
+        if (track.isOnline || !track.youtubeVideoId.isNullOrEmpty()) {
+            Log.d(tag, "Pista de YouTube / Online detectada: reproducción manejada por motor de streaming de YouTube.")
+            return
+        }
+
         try {
             val player = MediaPlayer()
             mediaPlayer = player

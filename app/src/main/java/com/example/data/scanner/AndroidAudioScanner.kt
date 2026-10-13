@@ -124,12 +124,30 @@ object AndroidAudioScanner {
                         ).toString()
                     } else null
 
-                    // Carpeta contenedora
+                    val relativePathCol = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        cursor.getColumnIndex(MediaStore.Audio.Media.RELATIVE_PATH)
+                    } else -1
+                    val rawRelativePath = if (relativePathCol >= 0) cursor.getString(relativePathCol) ?: "" else ""
+
+                    // Carpeta contenedora real del dispositivo
                     val fileObj = if (filePath.isNotEmpty()) File(filePath) else null
                     val fileName = if (displayName.isNotBlank()) displayName else fileObj?.name ?: "Pista ${mediaId}"
                     val folderObj = fileObj?.parentFile
-                    val folderName = folderObj?.name ?: "Almacenamiento"
-                    val folderPath = folderObj?.absolutePath ?: ""
+                    val folderFromRelative = rawRelativePath.trim('/').substringAfterLast('/')
+                    val folderName = when {
+                        folderFromRelative.isNotBlank() -> folderFromRelative
+                        folderObj?.name != null && folderObj.name.isNotBlank() && folderObj.name != "0" -> folderObj.name
+                        filePath.isNotBlank() -> {
+                            val parent = fileObj?.parentFile?.name
+                            if (!parent.isNullOrBlank() && parent != "0") parent else "Descargas"
+                        }
+                        else -> "Música"
+                    }
+                    val folderPath = when {
+                        rawRelativePath.isNotBlank() -> rawRelativePath
+                        folderObj != null -> folderObj.absolutePath
+                        else -> "/storage/emulated/0/$folderName"
+                    }
 
                     // Título limpio
                     val cleanTitle = if (rawTitle.isNotBlank()) {

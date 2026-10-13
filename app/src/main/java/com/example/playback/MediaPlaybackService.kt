@@ -71,11 +71,15 @@ class MediaPlaybackService : Service() {
         return START_NOT_STICKY
     }
 
+    var mediaSessionToken: android.media.session.MediaSession.Token? = null
+
     fun updateNotification(track: Track?, isPlaying: Boolean) {
         if (track == null) {
             stopForeground(STOP_FOREGROUND_REMOVE)
             return
         }
+
+        playbackManager?.updateTrack(track)
 
         val openAppIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -109,31 +113,48 @@ class MediaPlaybackService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+        val effectiveToken = mediaSessionToken ?: playbackManager?.sessionToken
+
+        val prevAction = Notification.Action.Builder(
+            android.graphics.drawable.Icon.createWithResource(this, android.R.drawable.ic_media_previous),
+            "Anterior",
+            prevPendingIntent
+        ).build()
+
+        val playPauseAction = Notification.Action.Builder(
+            android.graphics.drawable.Icon.createWithResource(
+                this,
+                if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
+            ),
+            if (isPlaying) "Pausa" else "Reproducir",
+            playPausePendingIntent
+        ).build()
+
+        val nextAction = Notification.Action.Builder(
+            android.graphics.drawable.Icon.createWithResource(this, android.R.drawable.ic_media_next),
+            "Siguiente",
+            nextPendingIntent
+        ).build()
+
+        val builder = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(track.title)
-            .setContentText("${track.artist} • SoundWave")
+            .setContentText("${track.artist} • Distrito Music 503")
             .setContentIntent(contentPendingIntent)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
             .setOngoing(isPlaying)
-            .addAction(
-                android.R.drawable.ic_media_previous,
-                "Previous",
-                prevPendingIntent
-            )
-            .addAction(
-                if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
-                if (isPlaying) "Pause" else "Play",
-                playPausePendingIntent
-            )
-            .addAction(
-                android.R.drawable.ic_media_next,
-                "Next",
-                nextPendingIntent
-            )
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
+            .addAction(prevAction)
+            .addAction(playPauseAction)
+            .addAction(nextAction)
 
+        if (effectiveToken != null) {
+            val mediaStyle = Notification.MediaStyle()
+                .setMediaSession(effectiveToken)
+                .setShowActionsInCompactView(0, 1, 2)
+            builder.setStyle(mediaStyle)
+        }
+
+        val notification = builder.build()
         startForeground(NOTIFICATION_ID, notification)
     }
 
@@ -141,11 +162,12 @@ class MediaPlaybackService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "Music Playback",
+                "Distrito Music 503 Reproducción",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Controls and media buttons for music playback"
+                description = "Controles de reproducción multimedia y pantalla bloqueada"
                 setShowBadge(false)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(channel)

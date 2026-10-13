@@ -47,7 +47,9 @@ fun Song.toTrack(): com.example.data.model.Track {
         isOnline = false,
         audioUrl = if (this.contentUri.isNotBlank()) this.contentUri else this.filePath,
         genre = this.genre,
-        isFavorite = this.isFavorite
+        isFavorite = this.isFavorite,
+        folderName = if (this.folderName.isNotBlank()) this.folderName else "Música",
+        folderPath = this.folderPath
     )
 }
 

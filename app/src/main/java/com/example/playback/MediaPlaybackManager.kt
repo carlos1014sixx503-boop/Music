@@ -34,6 +34,24 @@ class MediaPlaybackManager(
     private var audioFocusRequest: AudioFocusRequest? = null
     private var isNoisyReceiverRegistered = false
 
+    val sessionToken: MediaSession.Token?
+        get() = mediaSession?.sessionToken
+
+    fun updateTrack(track: Track?) {
+        if (track == null) return
+        try {
+            val metadata = android.media.MediaMetadata.Builder()
+                .putString(android.media.MediaMetadata.METADATA_KEY_TITLE, track.title)
+                .putString(android.media.MediaMetadata.METADATA_KEY_ARTIST, track.artist)
+                .putString(android.media.MediaMetadata.METADATA_KEY_ALBUM, "Distrito Music 503")
+                .putLong(android.media.MediaMetadata.METADATA_KEY_DURATION, track.durationMs)
+                .build()
+            mediaSession?.setMetadata(metadata)
+        } catch (e: Exception) {
+            Log.e(tag, "Error setting MediaMetadata: ${e.message}")
+        }
+    }
+
     private val becomingNoisyReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) {
